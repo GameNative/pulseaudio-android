@@ -10,3 +10,6 @@
 /libtool/build-arm64
 /pulseaudio/build-armhf
 /pulseaudio/build-arm64
+
+# idea
+/.idea

@@ -8,7 +8,7 @@ do
     esac
 done
 
-export NDK_PATH="/root/tools/android-ndk"
+export NDK_PATH="$HOME/Android/Sdk/ndk/27.3.13750724"
 export BASE_DIR="$PWD"
 export ROOT_DIR="$BASE_DIR/root-$arch"
 export PATH=$ROOT_DIR/bin:$PATH

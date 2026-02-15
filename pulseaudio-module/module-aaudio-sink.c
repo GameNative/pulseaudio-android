@@ -32,7 +32,7 @@
 #define __INTRODUCED_IN(api_level)
 #include <aaudio/AAudio.h>
 
-PA_MODULE_AUTHOR("Tom Yan, BrunoSX");
+PA_MODULE_AUTHOR("Tom Yan, BrunoSX, Joshua Tam");
 PA_MODULE_DESCRIPTION("Winlator AAudio sink");
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(false);
@@ -48,6 +48,7 @@ PA_MODULE_USAGE(
 
 enum {
     SINK_MESSAGE_RENDER = PA_SINK_MESSAGE_MAX,
+    SINK_MESSAGE_RECONNECT,
 };
 
 struct userdata {
@@ -86,6 +87,17 @@ static aaudio_data_callback_result_t aaudio_data_callback(AAudioStream *stream, 
     return pa_asyncmsgq_send(u->aaudio_msgq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_RENDER, audioData, numFrames, NULL);
 }
 
+static void aaudio_error_callback(AAudioStream *stream, void *userdata, aaudio_result_t error) {
+    struct userdata* u = userdata;
+    
+    if (error == AAUDIO_ERROR_DISCONNECTED) {
+        pa_log("AAudio device disconnected, attempting to reconnect...");
+        pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_RECONNECT, NULL, 0, NULL, NULL);
+    } else {
+        pa_log("AAudio error callback: %d", error);
+    }
+}
+
 static int pa_create_aaudio_stream(struct userdata *u) {
 	aaudio_result_t res;
 
@@ -96,7 +108,8 @@ static int pa_create_aaudio_stream(struct userdata *u) {
 	}
 	
     AAudioStreamBuilder_setPerformanceMode(u->builder, u->performance_mode);
-	AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);	
+	AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);
+	AAudioStreamBuilder_setErrorCallback(u->builder, aaudio_error_callback, u);	
     AAudioStreamBuilder_setFormat(u->builder, u->ss.format == PA_SAMPLE_FLOAT32LE ? AAUDIO_FORMAT_PCM_FLOAT : AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setSampleRate(u->builder, u->ss.rate);
     AAudioStreamBuilder_setChannelCount(u->builder, u->ss.channels);
@@ -118,6 +131,16 @@ static int pa_create_aaudio_stream(struct userdata *u) {
     return 0;
 }
 
+static int pa_recreate_aaudio_stream(struct userdata *u) {
+    if (u->stream) {
+        AAudioStream_requestStop(u->stream);
+        AAudioStream_close(u->stream);
+        u->stream = NULL;
+    }
+    
+    return pa_create_aaudio_stream(u);
+}
+
 static int sink_process_render(struct userdata *u, void *audioData, int64_t numFrames) {
     if (!PA_SINK_IS_LINKED(u->sink->thread_info.state)) return AAUDIO_CALLBACK_RESULT_STOP;
 
@@ -137,6 +160,19 @@ static int sink_process_msg(pa_msgobject *o, int code, void *data, int64_t offse
     struct userdata* u = PA_SINK(o)->userdata;
 
 	if (code == SINK_MESSAGE_RENDER) return sink_process_render(u, data, offset);
+	
+	if (code == SINK_MESSAGE_RECONNECT) {
+		if (pa_recreate_aaudio_stream(u) == 0) {
+			pa_log("AAudio stream recreated successfully");
+			if (PA_SINK_IS_OPENED(u->sink->thread_info.state)) {
+				AAudioStream_requestStart(u->stream);
+			}
+		} else {
+			pa_log("Failed to recreate AAudio stream");
+		}
+		return 0;
+	}
+	
     return pa_sink_process_msg(o, code, data, offset, memchunk);
 };
 
