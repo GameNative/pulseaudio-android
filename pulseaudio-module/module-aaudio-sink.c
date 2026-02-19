@@ -178,13 +178,21 @@ static int sink_process_msg(pa_msgobject *o, int code, void *data, int64_t offse
 
 static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspend_cause_t suspend_cause) {
     struct userdata *u = s->userdata;
+    aaudio_result_t res;
 
     if (PA_SINK_IS_OPENED(s->thread_info.state) && (state == PA_SINK_SUSPENDED || state == PA_SINK_UNLINKED)) {
-		AAudioStream_requestStop(u->stream);
+		res = AAudioStream_requestStop(u->stream);
+		if (res != AAUDIO_OK) {
+			pa_log("AAudioStream_requestStop() failed: %d", res);
+		}
     } 
 	else if ((s->thread_info.state == PA_SINK_SUSPENDED || (s->thread_info.state == PA_SINK_INIT && PA_SINK_IS_LINKED(state)))
 			 && PA_SINK_IS_OPENED(state)) {
-        AAudioStream_requestStart(u->stream);
+        res = AAudioStream_requestStart(u->stream);
+		if (res != AAUDIO_OK) {
+			pa_log("AAudioStream_requestStart() failed: %d", res);
+			return -1;
+		}
     }
 	
     return 0;
@@ -315,7 +323,7 @@ int pa__init(pa_module* m) {
         goto error;
     }
 	
-    u->sink = pa_sink_new(m->core, &data, 0);
+    u->sink = pa_sink_new(m->core, &data, PA_SINK_HARDWARE);
     pa_sink_new_data_done(&data);
 
     if (!u->sink) {
