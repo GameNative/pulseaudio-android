@@ -108,6 +108,8 @@ static int pa_create_aaudio_stream(struct userdata *u) {
 	}
 	
     AAudioStreamBuilder_setPerformanceMode(u->builder, u->performance_mode);
+	AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
+	AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
 	AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);
 	AAudioStreamBuilder_setErrorCallback(u->builder, aaudio_error_callback, u);	
     AAudioStreamBuilder_setFormat(u->builder, u->ss.format == PA_SAMPLE_FLOAT32LE ? AAUDIO_FORMAT_PCM_FLOAT : AAUDIO_FORMAT_PCM_I16);
@@ -124,6 +126,15 @@ static int pa_create_aaudio_stream(struct userdata *u) {
 	if (res != AAUDIO_OK) {
 		pa_log("AAudioStreamBuilder_delete() failed.");
 		return -1;
+	}
+
+	int32_t framesPerBurst = AAudioStream_getFramesPerBurst(u->stream);
+	int32_t bufferSize = framesPerBurst * 2;
+	res = AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
+	if (res < 0) {
+		pa_log("AAudioStream_setBufferSizeInFrames() failed: %d", res);
+	} else {
+		pa_log("AAudio buffer size set to %d frames (2x burst of %d frames)", bufferSize, framesPerBurst);
 	}
 
     u->frame_size = pa_frame_size(&u->ss);
