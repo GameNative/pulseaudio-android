@@ -109,7 +109,7 @@ static int pa_create_aaudio_stream(struct userdata *u) {
 	
     AAudioStreamBuilder_setPerformanceMode(u->builder, u->performance_mode);
 	AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
-	AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+	AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
 	AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);
 	AAudioStreamBuilder_setErrorCallback(u->builder, aaudio_error_callback, u);	
     AAudioStreamBuilder_setFormat(u->builder, u->ss.format == PA_SAMPLE_FLOAT32LE ? AAUDIO_FORMAT_PCM_FLOAT : AAUDIO_FORMAT_PCM_I16);
