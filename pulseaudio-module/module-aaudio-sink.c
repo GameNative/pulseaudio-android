@@ -173,13 +173,21 @@ static int sink_process_msg(pa_msgobject *o, int code, void *data, int64_t offse
 	if (code == SINK_MESSAGE_RENDER) return sink_process_render(u, data, offset);
 	
 	if (code == SINK_MESSAGE_RECONNECT) {
+		pa_log("AAudio reconnect requested, current state: %d", u->sink->thread_info.state);
 		if (pa_recreate_aaudio_stream(u) == 0) {
 			pa_log("AAudio stream recreated successfully");
 			if (PA_SINK_IS_OPENED(u->sink->thread_info.state)) {
-				AAudioStream_requestStart(u->stream);
+				aaudio_result_t res = AAudioStream_requestStart(u->stream);
+				if (res == AAUDIO_OK) {
+					pa_log("AAudio stream started successfully after reconnect");
+				} else {
+					pa_log("AAudioStream_requestStart() failed after reconnect: %d", res);
+				}
+			} else {
+				pa_log("Sink not in opened state, skipping stream start");
 			}
 		} else {
-			pa_log("Failed to recreate AAudio stream");
+			pa_log("Failed to recreate AAudio stream during reconnect");
 		}
 		return 0;
 	}
@@ -192,17 +200,46 @@ static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspen
     aaudio_result_t res;
 
     if (PA_SINK_IS_OPENED(s->thread_info.state) && (state == PA_SINK_SUSPENDED || state == PA_SINK_UNLINKED)) {
-		res = AAudioStream_requestStop(u->stream);
-		if (res != AAUDIO_OK) {
-			pa_log("AAudioStream_requestStop() failed: %d", res);
+		if (state == PA_SINK_SUSPENDED) {
+			res = AAudioStream_requestPause(u->stream);
+			if (res != AAUDIO_OK) {
+				pa_log("AAudioStream_requestPause() failed: %d", res);
+			} else {
+				pa_log("AAudio stream paused (suspend cause: %d)", suspend_cause);
+			}
+		} else {
+			res = AAudioStream_requestStop(u->stream);
+			if (res != AAUDIO_OK) {
+				pa_log("AAudioStream_requestStop() failed: %d", res);
+			}
 		}
     } 
 	else if ((s->thread_info.state == PA_SINK_SUSPENDED || (s->thread_info.state == PA_SINK_INIT && PA_SINK_IS_LINKED(state)))
 			 && PA_SINK_IS_OPENED(state)) {
-        res = AAudioStream_requestStart(u->stream);
-		if (res != AAUDIO_OK) {
-			pa_log("AAudioStream_requestStart() failed: %d", res);
-			return -1;
+		aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
+		pa_log("AAudio stream state on resume: %d", stream_state);
+		
+		if (stream_state == AAUDIO_STREAM_STATE_PAUSED) {
+			res = AAudioStream_requestStart(u->stream);
+			if (res != AAUDIO_OK) {
+				pa_log("AAudioStream_requestStart() failed from paused state: %d", res);
+				return -1;
+			} else {
+				pa_log("AAudio stream resumed from paused state");
+			}
+		} else {
+			pa_log("AAudio stream not in paused state (%d), recreating stream", stream_state);
+			if (pa_recreate_aaudio_stream(u) < 0) {
+				pa_log("Failed to recreate AAudio stream during resume");
+				return -1;
+			}
+			res = AAudioStream_requestStart(u->stream);
+			if (res != AAUDIO_OK) {
+				pa_log("AAudioStream_requestStart() failed after recreation: %d", res);
+				return -1;
+			} else {
+				pa_log("AAudio stream started successfully after recreation");
+			}
 		}
     }
 	
