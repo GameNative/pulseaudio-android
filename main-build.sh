@@ -39,23 +39,33 @@ export CC="$TOOLCHAIN/${BUILDCHAIN}26-clang"
 export CXX="$TOOLCHAIN/${BUILDCHAIN}26-clang++"
 
 if [ ! -e "$ROOT_DIR/lib/libltdl.so" ] ; then
+  pushd libtool
+  sed -i 's/1.15/1.18/g' aclocal.m4
+  autoreconf
+  popd
+
 	mkdir -p libtool/build-$arch
 	pushd libtool/build-$arch
 	../configure --host=$BUILDCHAIN --prefix=$ROOT_DIR HELP2MAN=/bin/true MAKEINFO=/bin/true
-	make
-	make install
+	make -j $(proc)
+	make install -j $(proc)
 	popd
 fi
 
 export LIBTOOLIZE=$ROOT_DIR/bin/libtoolize
 
 if [ ! -e "$ROOT_DIR/lib/libsndfile.so" ] ; then
+  pushd libsndfile
+  sed -i 's/1.15/1.18/g' aclocal.m4
+  autoreconf
+  popd
+  
 	mkdir -p libsndfile/build-$arch
 	pushd libsndfile/build-$arch
 	../configure --host=$BUILDCHAIN --prefix=$ROOT_DIR --disable-external-libs --disable-alsa --disable-sqlite
 	perl -pi -e 's/ examples / /g' Makefile
-	make
-	make install
+	make -j $(proc)
+	make install -j $(proc)
 	popd
 fi
 
@@ -66,10 +76,18 @@ popd
 rm -r pulseaudio/build-$arch
 mkdir -p pulseaudio/build-$arch
 pushd pulseaudio/build-$arch
-../configure --host=$BUILDCHAIN --prefix=$ROOT_DIR --disable-static --enable-shared --disable-rpath --disable-nls --disable-x11 --disable-oss-wrapper --disable-alsa --disable-esound --disable-waveout --disable-glib2 --disable-gtk3 --disable-gconf --disable-avahi --disable-jack --disable-asyncns --disable-tcpwrap --disable-lirc --disable-dbus --disable-bluez5 --disable-udev --disable-openssl --disable-manpages --disable-samplerate --without-speex --with-database=simple --disable-orc --without-caps --without-fftw --disable-systemd-daemon --disable-systemd-login --disable-systemd-journal --disable-webrtc-aec --disable-tests --disable-neon-opt --disable-gsettings
+../configure --host=$BUILDCHAIN --prefix=$ROOT_DIR --disable-static --enable-shared --disable-rpath \
+              --disable-nls --disable-x11 --disable-oss-wrapper --disable-alsa --disable-esound \
+              --disable-waveout --disable-glib2 --disable-gtk3 --disable-gconf --disable-avahi \
+              --disable-jack --disable-asyncns --disable-tcpwrap --disable-lirc --disable-dbus \
+              --disable-bluez5 --disable-udev --disable-openssl --disable-manpages --disable-samplerate \
+              --without-speex --with-database=simple --disable-orc --without-caps --without-fftw \
+              --disable-systemd-daemon --disable-systemd-login --disable-systemd-journal \
+              --disable-webrtc-aec --disable-tests --disable-neon-opt --disable-gsettings \
+              --without-soxr
 
-make
-make install
+make -j $(proc)
+make install -j $(proc)
 
 rm -r $OUTPUT_DIR
 mkdir -p $OUTPUT_DIR
