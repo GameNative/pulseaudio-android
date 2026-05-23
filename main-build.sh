@@ -93,6 +93,7 @@ rm -r $OUTPUT_DIR
 mkdir -p $OUTPUT_DIR
 mkdir -p $OUTPUT_DIR/modules
 
+cp -a $ROOT_DIR/bin/pactl $OUTPUT_DIR/pactl
 cp -a $ROOT_DIR/bin/pulseaudio $OUTPUT_DIR/libpulseaudio.so
 cp -a $ROOT_DIR/lib/pulseaudio/libpulsecommon-13.0.so $OUTPUT_DIR/libpulsecommon-13.0.so
 cp -a $ROOT_DIR/lib/pulseaudio/libpulsecore-13.0.so $OUTPUT_DIR/libpulsecore-13.0.so

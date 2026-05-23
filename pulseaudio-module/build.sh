@@ -7,7 +7,7 @@ rm -r build
 mkdir build64
 mkdir build
 
-export NDK_PATH="/root/tools/android-ndk"
+export NDK_PATH="/home/joshua/Android/Sdk/ndk/27.3.13750724"
 export TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
 export CC="$TOOLCHAIN/aarch64-linux-android26-clang"
