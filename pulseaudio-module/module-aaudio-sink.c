@@ -500,6 +500,7 @@ int pa__init(pa_module* m) {
     }	
 	
     pa_sink_put(u->sink);
+	pa_core_set_configured_default_sink(m->core, u->sink->name);
     pa_modargs_free(ma);	
 	return 0;
 error:
