@@ -43,6 +43,7 @@ PA_MODULE_USAGE(
     "rate=<sampling rate> "
     "volume=<output volume>"
     "performance_mode=<performance mode: 0 (NONE), 1 (Low Latency), 2 (Power Saving)>"
+    "low_latency=<enable low latency mode: true/false (default: false)>"
 );
 
 #define DEFAULT_SINK_NAME "AAudioSink"
@@ -72,6 +73,7 @@ struct userdata {
     
     float volume;
     int performance_mode;
+    bool low_latency;
     
     int32_t previous_underrun_count;
     int32_t frames_per_burst;
@@ -86,6 +88,7 @@ static const char* const valid_modargs[] = {
     "rate",
     "volume",
     "performance_mode",
+    "low_latency",
     NULL
 };
 
@@ -114,10 +117,18 @@ static void aaudio_error_callback(AAudioStream *stream, void *userdata, aaudio_r
 }
 
 static pa_usec_t get_aaudio_latency(struct userdata *u) {
-	int32_t bufferSize = AAudioStream_getBufferSizeInFrames(u->stream);
-	int32_t framesPerBurst = u->frames_per_burst;
-	int32_t totalLatencyFrames = bufferSize + framesPerBurst;
-	return PA_USEC_PER_SEC * totalLatencyFrames / u->ss.rate;
+	if (u->stream != NULL) {
+		if (u->low_latency) {
+			int32_t bufferSize = AAudioStream_getBufferSizeInFrames(u->stream);
+			int32_t framesPerBurst = u->frames_per_burst;
+			int32_t totalLatencyFrames = bufferSize + framesPerBurst;
+			return PA_USEC_PER_SEC * totalLatencyFrames / u->ss.rate;
+		}
+
+		return PA_USEC_PER_SEC * AAudioStream_getBufferSizeInFrames(u->stream) / u->ss.rate / 2;
+	}
+
+	return 20 * PA_USEC_PER_MSEC;
 }
 
 static void update_pa_latency(struct userdata *u) {
@@ -140,11 +151,13 @@ static int pa_create_aaudio_stream(struct userdata *u) {
 		return -1;
 	}
 
-	if (get_android_sdk_version() >= 28) {
-		AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
+	if (u->low_latency) {
+		if (get_android_sdk_version() >= 28) {
+			AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
+		}
+		AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
 	}
 
-	AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
 	AAudioStreamBuilder_setPerformanceMode(u->builder, u->performance_mode);
 	AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);
 	AAudioStreamBuilder_setErrorCallback(u->builder, aaudio_error_callback, u);	
@@ -184,22 +197,28 @@ static int pa_create_aaudio_stream(struct userdata *u) {
 
 	u->frames_per_burst = AAudioStream_getFramesPerBurst(u->stream);
 	int32_t bufferCapacity = AAudioStream_getBufferCapacityInFrames(u->stream);
-	int32_t bufferSize = u->frames_per_burst * 2;
 	
-	if (bufferSize > bufferCapacity) {
-		bufferSize = bufferCapacity;
-		pa_log("AAudio: Requested buffer size exceeds capacity, clamped to %d frames", bufferSize);
-	}
-	
-	res = AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
-	if (res < 0) {
-		pa_log("AAudioStream_setBufferSizeInFrames() failed: %d", res);
+	if (u->low_latency) {
+		int32_t bufferSize = u->frames_per_burst * 2;
+		
+		if (bufferSize > bufferCapacity) {
+			bufferSize = bufferCapacity;
+			pa_log("AAudio: Requested buffer size exceeds capacity, clamped to %d frames", bufferSize);
+		}
+		
+		res = AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
+		if (res < 0) {
+			pa_log("AAudioStream_setBufferSizeInFrames() failed: %d", res);
+		} else {
+			pa_log("AAudio buffer size set to %d frames (burst: %d, capacity: %d)", 
+			       bufferSize, u->frames_per_burst, bufferCapacity);
+		}
+		
+		u->previous_underrun_count = 0;
 	} else {
-		pa_log("AAudio buffer size set to %d frames (burst: %d, capacity: %d)", 
-		       bufferSize, u->frames_per_burst, bufferCapacity);
+		pa_log("AAudio low latency mode disabled, using default buffer size (burst: %d, capacity: %d)", 
+		       u->frames_per_burst, bufferCapacity);
 	}
-	
-	u->previous_underrun_count = 0;
     u->frame_size = pa_frame_size(&u->ss);
 
 	// Update pulseaudio latency based on current aaudio config
@@ -231,21 +250,23 @@ static int sink_process_render(struct userdata *u, void *audioData, int64_t numF
     pa_sink_render_into_full(u->sink, &u->memchunk);
     pa_memblock_unref_fixed(u->memchunk.memblock);
     
-    int32_t bufferSize = AAudioStream_getBufferSizeInFrames(u->stream);
-    int32_t bufferCapacity = AAudioStream_getBufferCapacityInFrames(u->stream);
-    
-    if (bufferSize < bufferCapacity) {
-        int32_t underrunCount = AAudioStream_getXRunCount(u->stream);
-        if (underrunCount > u->previous_underrun_count) {
-            u->previous_underrun_count = underrunCount;
-            bufferSize += u->frames_per_burst;
-            if (bufferSize > bufferCapacity) {
-                bufferSize = bufferCapacity;
-            }
-            AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
+    if (u->low_latency) {
+        int32_t bufferSize = AAudioStream_getBufferSizeInFrames(u->stream);
+        int32_t bufferCapacity = AAudioStream_getBufferCapacityInFrames(u->stream);
+        
+        if (bufferSize < bufferCapacity) {
+            int32_t underrunCount = AAudioStream_getXRunCount(u->stream);
+            if (underrunCount > u->previous_underrun_count) {
+                u->previous_underrun_count = underrunCount;
+                bufferSize += u->frames_per_burst;
+                if (bufferSize > bufferCapacity) {
+                    bufferSize = bufferCapacity;
+                }
+                AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
 
-        	// Update pulseaudio latency when the aaudio config changed
-            update_pa_latency(u);
+            	// Update pulseaudio latency when the aaudio config changed
+                update_pa_latency(u);
+            }
         }
     }
 
@@ -428,6 +449,7 @@ int pa__init(pa_module* m) {
     
     u->volume = 1.0;
     u->performance_mode = AAUDIO_PERFORMANCE_MODE_LOW_LATENCY;
+    u->low_latency = false;
     
     double volume = 0.0;
     if (!pa_modargs_get_value_double(ma, "volume", &volume)) u->volume = volume;
@@ -445,6 +467,11 @@ int pa__init(pa_module* m) {
                 u->performance_mode = AAUDIO_PERFORMANCE_MODE_POWER_SAVING;
                 break;                
         }
+    }
+    
+    if (pa_modargs_get_value_boolean(ma, "low_latency", &u->low_latency) < 0) {
+        pa_log("Failed to parse low_latency argument.");
+        goto error;
     }
 	
     if (pa_create_aaudio_stream(u) < 0) goto error;
