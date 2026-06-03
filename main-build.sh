@@ -15,6 +15,7 @@ export PATH=$ROOT_DIR/bin:$PATH
 export PKG_CONFIG_PATH=$ROOT_DIR/lib/pkgconfig
 export ACLOCAL_PATH=$ROOT_DIR/share/aclocal
 export CFLAGS="-O2 -I$ROOT_DIR/include"
+export LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 
 export ALLOW_UNRESOLVED_SYMBOLS=1
 export ac_cv_func_mkfifo=no
@@ -25,6 +26,7 @@ export ac_cv_header_glob_h=no
 export ac_cv_func_malloc_0_nonnull=yes
 export ac_cv_func_realloc_0_nonnull=yes
 export ac_cv_lib_ltdl_lt_dladvise_init=yes
+export ax_cv_check_cflags__pedantic__Werror__std_gnu11=yes
 
 if [ $arch = "arm64" ]; then
 	BUILDCHAIN=aarch64-linux-android
@@ -86,8 +88,8 @@ pushd pulseaudio/build-$arch
               --disable-webrtc-aec --disable-tests --disable-neon-opt --disable-gsettings \
               --without-soxr
 
-make -j $(proc)
-make install -j $(proc)
+make -j $(nproc)
+make install -j $(nproc)
 
 rm -r $OUTPUT_DIR
 mkdir -p $OUTPUT_DIR
