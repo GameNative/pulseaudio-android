@@ -104,3 +104,13 @@ cp -a $ROOT_DIR/lib/libsndfile.so $OUTPUT_DIR/libsndfile.so
 cp -a $ROOT_DIR/lib/libltdl.so $OUTPUT_DIR/libltdl.so
 cp -a $ROOT_DIR/lib/pulse-13.0/modules/libprotocol-native.so $OUTPUT_DIR/modules/libprotocol-native.so
 cp -a $ROOT_DIR/lib/pulse-13.0/modules/module-native-protocol-unix.so $OUTPUT_DIR/modules/module-native-protocol-unix.so
+
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/pactl
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/libpulseaudio.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/libpulsecommon-13.0.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/libpulsecore-13.0.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/libpulse.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/libsndfile.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/libltdl.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/modules/libprotocol-native.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/modules/module-native-protocol-unix.so
