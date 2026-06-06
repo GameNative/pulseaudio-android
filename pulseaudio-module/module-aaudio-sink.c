@@ -363,13 +363,23 @@ static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspen
 				   current_device_id, new_device_id);
 		} else if (stream_state == AAUDIO_STREAM_STATE_STOPPING ||
 			stream_state == AAUDIO_STREAM_STATE_STOPPED) {
-			res = AAudioStream_requestStart(u->stream);
 			pa_log("AAudio stream is stopped at state %d, starting", stream_state);
+			res = AAudioStream_requestStart(u->stream);
 			if (res != AAUDIO_OK) {
-				pa_log("AAudioStream_requestStart() failed: %d", res);
-				return -1;
+				pa_log("AAudioStream_requestStart() failed: %d, recreating", res);
+				if (pa_recreate_aaudio_stream(u) < 0) {
+					pa_log("Failed to recreate AAudio stream");
+					return -1;
+				}
+				res = AAudioStream_requestStart(u->stream);
+				if (res != AAUDIO_OK) {
+					pa_log("AAudioStream_requestStart() failed: %d", res);
+					return -1;
+				}
+				pa_log("AAudio stream recreated and started");
+			} else {
+				pa_log("AAudio stream started");
 			}
-			pa_log("AAudio stream started");
 		} else if (stream_state != AAUDIO_STREAM_STATE_STARTED && 
 		           stream_state != AAUDIO_STREAM_STATE_STARTING) {
 			pa_log("AAudio stream in unexpected state %d, recreating", stream_state);
@@ -402,8 +412,7 @@ static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspen
 				pa_log("AAudio stream still valid, continuing with existing stream");
 			}
 		}
-    }
-	else if (s->thread_info.state == PA_SINK_INIT && PA_SINK_IS_OPENED(state)) {
+    } else if (s->thread_info.state == PA_SINK_INIT && PA_SINK_IS_OPENED(state)) {
 		aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
 		pa_log("AAudio stream initial start, state: %d", stream_state);
 		
