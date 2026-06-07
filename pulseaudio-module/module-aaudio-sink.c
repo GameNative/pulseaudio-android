@@ -330,7 +330,12 @@ static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspen
 			pa_log("AAudio stream stopped for unlink");
 		}
     } else if (PA_SINK_IS_OPENED(s->thread_info.state) && state == PA_SINK_SUSPENDED) {
-    	pa_log("Got signal for suspendSink, muting pulseaudio for sound output");
+    	res = AAudioStream_requestStop(u->stream);
+    	if (res != AAUDIO_OK) {
+    		pa_log("AAudioStream_requestStop() failed on suspend: %d", res);
+    	} else {
+    		pa_log("AAudio stream stopped for suspend, device ID: %d", u->last_device_id);
+    	}
     }
 	else if (s->thread_info.state == PA_SINK_SUSPENDED && PA_SINK_IS_OPENED(state)) {
 		aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
