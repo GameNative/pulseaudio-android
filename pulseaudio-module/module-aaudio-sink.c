@@ -50,7 +50,8 @@ PA_MODULE_USAGE(
 
 enum {
     SINK_MESSAGE_RENDER = PA_SINK_MESSAGE_MAX,
-    SINK_MESSAGE_RECONNECT,
+    SINK_MESSAGE_TRY_START,
+    SINK_MESSAGE_RECREATE,
 };
 
 struct userdata {
@@ -61,7 +62,7 @@ struct userdata {
     pa_thread *thread;
     pa_thread_mq thread_mq;
     pa_rtpoll *rtpoll;
-	pa_rtpoll_item *rtpoll_item;
+    pa_rtpoll_item *rtpoll_item;
     pa_asyncmsgq *aaudio_msgq;
 
     pa_memchunk memchunk;
@@ -69,7 +70,7 @@ struct userdata {
 
     AAudioStreamBuilder *builder;
     AAudioStream *stream;
-	pa_sample_spec ss;
+    pa_sample_spec ss;
     
     float volume;
     int performance_mode;
@@ -101,6 +102,14 @@ static int get_android_sdk_version(void) {
     return 0;
 }
 
+static void schedule_start(struct userdata *u) {
+    pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_TRY_START, NULL, 0, NULL, NULL);
+}
+
+static void schedule_recreate(struct userdata *u) {
+    pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_RECREATE, NULL, 0, NULL, NULL);
+}
+
 static aaudio_data_callback_result_t aaudio_data_callback(AAudioStream *stream, void *userdata, void *audioData, int32_t numFrames) {
     struct userdata* u = userdata;
     return pa_asyncmsgq_send(u->aaudio_msgq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_RENDER, audioData, numFrames, NULL);
@@ -114,132 +123,148 @@ static void aaudio_error_callback(AAudioStream *stream, void *userdata, aaudio_r
         error == AAUDIO_ERROR_INVALID_HANDLE ||
         error == AAUDIO_ERROR_TIMEOUT) {
         pa_log("AAudio stream error (%d), attempting to reconnect...", error);
-        pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_RECONNECT, NULL, 0, NULL, NULL);
+        schedule_recreate(u);
     } else {
         pa_log("AAudio error callback: %d", error);
     }
 }
 
 static pa_usec_t get_aaudio_latency(struct userdata *u) {
-	if (u->stream != NULL) {
-		if (u->low_latency) {
-			int32_t bufferSize = AAudioStream_getBufferSizeInFrames(u->stream);
-			int32_t framesPerBurst = u->frames_per_burst;
-			int32_t totalLatencyFrames = bufferSize + framesPerBurst;
-			return PA_USEC_PER_SEC * totalLatencyFrames / u->ss.rate;
-		}
+    if (u->stream != NULL) {
+        if (u->low_latency) {
+            int32_t bufferSize = AAudioStream_getBufferSizeInFrames(u->stream);
+            int32_t framesPerBurst = u->frames_per_burst;
+            int32_t totalLatencyFrames = bufferSize + framesPerBurst;
+            return PA_USEC_PER_SEC * totalLatencyFrames / u->ss.rate;
+        }
 
-		return PA_USEC_PER_SEC * AAudioStream_getBufferSizeInFrames(u->stream) / u->ss.rate / 2;
-	}
+        return PA_USEC_PER_SEC * AAudioStream_getBufferSizeInFrames(u->stream) / u->ss.rate / 2;
+    }
 
-	return 20 * PA_USEC_PER_MSEC;
+    return 20 * PA_USEC_PER_MSEC;
 }
 
 static void update_pa_latency(struct userdata *u) {
-	if (u->sink) {
-		pa_usec_t latency = get_aaudio_latency(u);
-		if (pa_thread_mq_get()) {
-			pa_sink_set_fixed_latency_within_thread(u->sink, latency);
-		} else {
-			pa_sink_set_fixed_latency(u->sink, latency);
-		}
-	}
+    if (u->sink) {
+        pa_usec_t latency = get_aaudio_latency(u);
+        if (pa_thread_mq_get()) {
+            pa_sink_set_fixed_latency_within_thread(u->sink, latency);
+        } else {
+            pa_sink_set_fixed_latency(u->sink, latency);
+        }
+    }
 }
 
 static int pa_create_aaudio_stream(struct userdata *u) {
-	aaudio_result_t res;
+    aaudio_result_t res;
 
     res = AAudio_createStreamBuilder(&u->builder);
-	if (res != AAUDIO_OK) {
-		pa_log("AAudio_createStreamBuilder() failed.");
-		return -1;
-	}
+    if (res != AAUDIO_OK) {
+        pa_log("AAudio_createStreamBuilder() failed.");
+        return -1;
+    }
 
-	if (u->low_latency) {
-		if (get_android_sdk_version() >= 28) {
-			AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
-		}
-		AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
-	}
+    if (u->low_latency) {
+        if (get_android_sdk_version() >= 28) {
+            AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
+        }
+        AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
+    }
 
-	AAudioStreamBuilder_setPerformanceMode(u->builder, u->performance_mode);
-	AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);
-	AAudioStreamBuilder_setErrorCallback(u->builder, aaudio_error_callback, u);	
+    AAudioStreamBuilder_setPerformanceMode(u->builder, u->performance_mode);
+    AAudioStreamBuilder_setDataCallback(u->builder, aaudio_data_callback, u);
+    AAudioStreamBuilder_setErrorCallback(u->builder, aaudio_error_callback, u);    
     AAudioStreamBuilder_setFormat(u->builder, u->ss.format == PA_SAMPLE_FLOAT32LE ? AAUDIO_FORMAT_PCM_FLOAT : AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setSampleRate(u->builder, AAUDIO_UNSPECIFIED);
     AAudioStreamBuilder_setChannelCount(u->builder, AAUDIO_UNSPECIFIED);
 
     res = AAudioStreamBuilder_openStream(u->builder, &u->stream);
-	if (res != AAUDIO_OK) {
-		pa_log("AAudioStreamBuilder_openStream() failed.");
-		return -1;
-	}
-	
+    if (res != AAUDIO_OK) {
+        pa_log("AAudioStreamBuilder_openStream() failed.");
+        return -1;
+    }
+    
     res = AAudioStreamBuilder_delete(u->builder);
-	if (res != AAUDIO_OK) {
-		pa_log("AAudioStreamBuilder_delete() failed.");
-		return -1;
-	}
+    if (res != AAUDIO_OK) {
+        pa_log("AAudioStreamBuilder_delete() failed.");
+        return -1;
+    }
 
-	u->device_sample_rate = AAudioStream_getSampleRate(u->stream);
-	u->device_channels = AAudioStream_getChannelCount(u->stream);
-	aaudio_format_t actual_format = AAudioStream_getFormat(u->stream);
-	aaudio_sharing_mode_t actual_sharing_mode = AAudioStream_getSharingMode(u->stream);
+    u->device_sample_rate = AAudioStream_getSampleRate(u->stream);
+    u->device_channels = AAudioStream_getChannelCount(u->stream);
+    aaudio_format_t actual_format = AAudioStream_getFormat(u->stream);
+    aaudio_sharing_mode_t actual_sharing_mode = AAudioStream_getSharingMode(u->stream);
 
-	pa_log("AAudio stream opened: %d Hz, %d channels, format %d, sharing mode %s",
-	       u->device_sample_rate, u->device_channels, actual_format,
-	       actual_sharing_mode == AAUDIO_SHARING_MODE_EXCLUSIVE ? "EXCLUSIVE" : "SHARED");
+    pa_log("AAudio stream opened: %d Hz, %d channels, format %d, sharing mode %s",
+           u->device_sample_rate, u->device_channels, actual_format,
+           actual_sharing_mode == AAUDIO_SHARING_MODE_EXCLUSIVE ? "EXCLUSIVE" : "SHARED");
 
-	u->ss.rate = u->device_sample_rate;
-	u->ss.channels = u->device_channels;
+    u->ss.rate = u->device_sample_rate;
+    u->ss.channels = u->device_channels;
 
-	if (actual_format == AAUDIO_FORMAT_PCM_FLOAT) {
-		u->ss.format = PA_SAMPLE_FLOAT32LE;
-	} else if (actual_format == AAUDIO_FORMAT_PCM_I16) {
-		u->ss.format = PA_SAMPLE_S16LE;
-	}
+    if (actual_format == AAUDIO_FORMAT_PCM_FLOAT) {
+        u->ss.format = PA_SAMPLE_FLOAT32LE;
+    } else if (actual_format == AAUDIO_FORMAT_PCM_I16) {
+        u->ss.format = PA_SAMPLE_S16LE;
+    }
 
-	u->frames_per_burst = AAudioStream_getFramesPerBurst(u->stream);
-	int32_t bufferCapacity = AAudioStream_getBufferCapacityInFrames(u->stream);
-	u->last_device_id = AAudioStream_getDeviceId(u->stream);
-	
-	if (u->low_latency) {
-		int32_t bufferSize = u->frames_per_burst * 2;
-		
-		if (bufferSize > bufferCapacity) {
-			bufferSize = bufferCapacity;
-			pa_log("AAudio: Requested buffer size exceeds capacity, clamped to %d frames", bufferSize);
-		}
-		
-		res = AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
-		if (res < 0) {
-			pa_log("AAudioStream_setBufferSizeInFrames() failed: %d", res);
-		} else {
-			pa_log("AAudio buffer size set to %d frames (burst: %d, capacity: %d)", 
-			       bufferSize, u->frames_per_burst, bufferCapacity);
-		}
-		
-		u->previous_underrun_count = 0;
-	} else {
-		pa_log("AAudio low latency mode disabled, using default buffer size (burst: %d, capacity: %d)", 
-		       u->frames_per_burst, bufferCapacity);
-	}
+    u->frames_per_burst = AAudioStream_getFramesPerBurst(u->stream);
+    int32_t bufferCapacity = AAudioStream_getBufferCapacityInFrames(u->stream);
+    u->last_device_id = AAudioStream_getDeviceId(u->stream);
+    
+    if (u->low_latency) {
+        int32_t bufferSize = u->frames_per_burst * 2;
+        
+        if (bufferSize > bufferCapacity) {
+            bufferSize = bufferCapacity;
+            pa_log("AAudio: Requested buffer size exceeds capacity, clamped to %d frames", bufferSize);
+        }
+        
+        res = AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
+        if (res < 0) {
+            pa_log("AAudioStream_setBufferSizeInFrames() failed: %d", res);
+        } else {
+            pa_log("AAudio buffer size set to %d frames (burst: %d, capacity: %d)", 
+                   bufferSize, u->frames_per_burst, bufferCapacity);
+        }
+        
+        u->previous_underrun_count = 0;
+    } else {
+        pa_log("AAudio low latency mode disabled, using default buffer size (burst: %d, capacity: %d)", 
+               u->frames_per_burst, bufferCapacity);
+    }
     u->frame_size = pa_frame_size(&u->ss);
 
-	// Update pulseaudio latency based on current aaudio config
+    // Update pulseaudio latency based on current aaudio config
     update_pa_latency(u);
 
     return 0;
 }
 
-static int pa_recreate_aaudio_stream(struct userdata *u) {
+static void try_start_stream(struct userdata *u) {
+    const aaudio_result_t res = AAudioStream_requestStart(u->stream);
+    if (res == AAUDIO_OK) {
+        pa_log("AAudioStream_requestStart() succeeded");
+    } else {
+        pa_log("AAudioStream_requestStart() failed: %d, scheduling recreate", res);
+        schedule_recreate(u);
+    }
+}
+
+static void recreate_aaudio_stream(struct userdata *u) {
     if (u->stream) {
         AAudioStream_requestStop(u->stream);
         AAudioStream_close(u->stream);
         u->stream = NULL;
     }
     
-    return pa_create_aaudio_stream(u);
+    if (pa_create_aaudio_stream(u) < 0) {
+        pa_log("Failed to create AAudio stream, scheduling recreate");
+        schedule_recreate(u);
+    } else {
+        pa_log("AAudio stream created, attempting to start");
+        schedule_start(u);
+    }
 }
 
 static int sink_process_render(struct userdata *u, void *audioData, int64_t numFrames) {
@@ -278,7 +303,7 @@ static int sink_process_render(struct userdata *u, void *audioData, int64_t numF
                 }
                 AAudioStream_setBufferSizeInFrames(u->stream, bufferSize);
 
-            	// Update pulseaudio latency when the aaudio config changed
+                // Update pulseaudio latency when the aaudio config changed
                 update_pa_latency(u);
             }
         }
@@ -290,143 +315,78 @@ static int sink_process_render(struct userdata *u, void *audioData, int64_t numF
 static int sink_process_msg(pa_msgobject *o, int code, void *data, int64_t offset, pa_memchunk *memchunk) {
     struct userdata* u = PA_SINK(o)->userdata;
 
-	if (code == SINK_MESSAGE_RENDER) return sink_process_render(u, data, offset);
-	
-	if (code == SINK_MESSAGE_RECONNECT) {
-		pa_log("AAudio reconnect requested, current state: %d", u->sink->thread_info.state);
-		if (pa_recreate_aaudio_stream(u) == 0) {
-			pa_log("AAudio stream recreated successfully");
-			if (PA_SINK_IS_OPENED(u->sink->thread_info.state)) {
-				aaudio_result_t res = AAudioStream_requestStart(u->stream);
-				if (res == AAUDIO_OK) {
-					pa_log("AAudio stream start requested after reconnect");
-				} else {
-					pa_log("AAudioStream_requestStart() failed after reconnect: %d", res);
-				}
-			} else {
-				pa_log("Sink not in opened state, skipping stream start");
-			}
-		} else {
-			pa_log("Failed to recreate AAudio stream during reconnect");
-		}
-		return 0;
-	}
-	
+    if (code == SINK_MESSAGE_RENDER) return sink_process_render(u, data, offset);
+    
+    if (code == SINK_MESSAGE_TRY_START) {
+        pa_log("AAudio try start requested");
+        if (PA_SINK_IS_OPENED(u->sink->thread_info.state)) {
+            try_start_stream(u);
+        } else {
+            pa_log("Sink no longer in opened state, canceling try");
+        }
+        return 0;
+    }
+    
+    if (code == SINK_MESSAGE_RECREATE) {
+        pa_log("AAudio recreate requested");
+        if (PA_SINK_IS_OPENED(u->sink->thread_info.state)) {
+            recreate_aaudio_stream(u);
+        } else {
+            pa_log("Sink no longer in opened state, canceling recreate");
+        }
+        return 0;
+    }
+    
     return pa_sink_process_msg(o, code, data, offset, memchunk);
-};
+}
 
 static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspend_cause_t suspend_cause) {
     struct userdata *u = s->userdata;
     aaudio_result_t res;
 
-	pa_log("AAudio sink state transition: current=%d, target=%d, suspend_cause=%d", 
-	       s->thread_info.state, state, suspend_cause);
+    pa_log("AAudio sink state transition: current=%d, target=%d, suspend_cause=%d", 
+           s->thread_info.state, state, suspend_cause);
 
     if (PA_SINK_IS_OPENED(s->thread_info.state) && state == PA_SINK_UNLINKED) {
-		res = AAudioStream_requestStop(u->stream);
-		if (res != AAUDIO_OK) {
-			pa_log("AAudioStream_requestStop() failed: %d", res);
-		} else {
-			pa_log("AAudio stream stopped for unlink");
-		}
+        res = AAudioStream_requestStop(u->stream);
+        if (res != AAUDIO_OK) {
+            pa_log("AAudioStream_requestStop() failed: %d", res);
+        } else {
+            pa_log("AAudio stream stopped for unlink");
+        }
     } else if (PA_SINK_IS_OPENED(s->thread_info.state) && state == PA_SINK_SUSPENDED) {
-    	res = AAudioStream_requestStop(u->stream);
-    	if (res != AAUDIO_OK) {
-    		pa_log("AAudioStream_requestStop() failed on suspend: %d", res);
-    	} else {
-    		pa_log("AAudio stream stopped for suspend, device ID: %d", u->last_device_id);
-    	}
-    }
-	else if (s->thread_info.state == PA_SINK_SUSPENDED && PA_SINK_IS_OPENED(state)) {
-		aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
-		int32_t current_device_id = AAudioStream_getDeviceId(u->stream);
-		
-		pa_log("AAudio stream resuming from suspended state, stream state: %d, device ID: %d", 
-		       stream_state, current_device_id);
-		
-		if (stream_state == AAUDIO_STREAM_STATE_DISCONNECTED || 
-		    stream_state == AAUDIO_STREAM_STATE_UNKNOWN ||
-		    stream_state == AAUDIO_STREAM_STATE_UNINITIALIZED) {
-			pa_log("AAudio stream disconnected/invalid (state: %d), recreating for device change", stream_state);
-			if (pa_recreate_aaudio_stream(u) < 0) {
-				pa_log("Failed to recreate AAudio stream during resume");
-				return -1;
-			}
-			res = AAudioStream_requestStart(u->stream);
-			if (res != AAUDIO_OK) {
-				pa_log("AAudioStream_requestStart() failed after recreation: %d", res);
-				return -1;
-			}
-			
-			int32_t new_device_id = AAudioStream_getDeviceId(u->stream);
-			pa_log("AAudio stream recreated and started (device ID: %d → %d)", 
-				   current_device_id, new_device_id);
-		} else if (stream_state == AAUDIO_STREAM_STATE_STOPPING ||
-			stream_state == AAUDIO_STREAM_STATE_STOPPED) {
-			pa_log("AAudio stream is stopped at state %d, starting", stream_state);
-			res = AAudioStream_requestStart(u->stream);
-			if (res != AAUDIO_OK) {
-				pa_log("AAudioStream_requestStart() failed: %d, recreating", res);
-				if (pa_recreate_aaudio_stream(u) < 0) {
-					pa_log("Failed to recreate AAudio stream");
-					return -1;
-				}
-				res = AAudioStream_requestStart(u->stream);
-				if (res != AAUDIO_OK) {
-					pa_log("AAudioStream_requestStart() failed: %d", res);
-					return -1;
-				}
-				pa_log("AAudio stream recreated and started");
-			} else {
-				pa_log("AAudio stream started");
-			}
-		} else if (stream_state != AAUDIO_STREAM_STATE_STARTED && 
-		           stream_state != AAUDIO_STREAM_STATE_STARTING) {
-			pa_log("AAudio stream in unexpected state %d, recreating", stream_state);
-			if (pa_recreate_aaudio_stream(u) < 0) {
-				pa_log("Failed to recreate AAudio stream");
-				return -1;
-			}
-			res = AAudioStream_requestStart(u->stream);
-			if (res != AAUDIO_OK) {
-				pa_log("AAudioStream_requestStart() failed: %d", res);
-				return -1;
-			}
-			pa_log("AAudio stream recreated and started");
-		} else {
-			int32_t new_device_id = AAudioStream_getDeviceId(u->stream);
-			if (new_device_id != u->last_device_id && u->last_device_id != 0) {
-				pa_log("AAudio device changed while suspended (%d → %d), recreating stream", 
-				       u->last_device_id, new_device_id);
-				if (pa_recreate_aaudio_stream(u) < 0) {
-					pa_log("Failed to recreate AAudio stream for device change");
-					return -1;
-				}
-				res = AAudioStream_requestStart(u->stream);
-				if (res != AAUDIO_OK) {
-					pa_log("AAudioStream_requestStart() failed after device change: %d", res);
-					return -1;
-				}
-				pa_log("AAudio stream recreated for new device %d", u->last_device_id);
-			} else {
-				pa_log("AAudio stream still valid, continuing with existing stream");
-			}
-		}
+        res = AAudioStream_requestPause(u->stream);
+        if (res != AAUDIO_OK) {
+            pa_log("AAudioStream_requestPause() failed: %d", res);
+        } else {
+            pa_log("AAudio stream paused for suspend");
+        }
+    } else if (s->thread_info.state == PA_SINK_SUSPENDED && PA_SINK_IS_OPENED(state)) {
+        aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
+        pa_log("AAudio stream resuming from suspended state, stream state: %d", stream_state);
+
+        if (stream_state == AAUDIO_STREAM_STATE_PAUSED ||
+            stream_state == AAUDIO_STREAM_STATE_PAUSING) {
+            pa_log("AAudio stream paused / pausing, trying to start");
+            schedule_start(u);
+        } else if (stream_state == AAUDIO_STREAM_STATE_STOPPED ||
+            stream_state == AAUDIO_STREAM_STATE_STOPPING) {
+            pa_log("AAudio stream stopped / stopping, trying to start");
+            schedule_start(u);
+        } else if (stream_state != AAUDIO_STREAM_STATE_STARTED && stream_state != AAUDIO_STREAM_STATE_STARTING) {
+            pa_log("AAudio stream not running (state: %d), recreating and starting", stream_state);
+            schedule_recreate(u);
+        }
     } else if (s->thread_info.state == PA_SINK_INIT && PA_SINK_IS_OPENED(state)) {
-		aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
-		pa_log("AAudio stream initial start, state: %d", stream_state);
-		
-		if (stream_state == AAUDIO_STREAM_STATE_OPEN || 
-		    stream_state == AAUDIO_STREAM_STATE_STOPPED) {
-			res = AAudioStream_requestStart(u->stream);
-			if (res != AAUDIO_OK) {
-				pa_log("AAudioStream_requestStart() failed: %d", res);
-				return -1;
-			}
-			pa_log("AAudio stream started");
-		}
+        aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
+        pa_log("AAudio stream initial start, state: %d", stream_state);
+        
+        if (stream_state == AAUDIO_STREAM_STATE_OPEN || 
+            stream_state == AAUDIO_STREAM_STATE_STOPPED) {
+            schedule_start(u);
+        }
     }
-	
+    
     return 0;
 }
 
@@ -437,11 +397,11 @@ static void thread_func(void *userdata) {
     for (;;) {
         if (PA_UNLIKELY(u->sink->thread_info.rewind_requested)) pa_sink_process_rewind(u->sink, 0);
 
-		int res = pa_rtpoll_run(u->rtpoll);
+        int res = pa_rtpoll_run(u->rtpoll);
         if (res < 0) {
-			goto error;
-		}
-		else if (res == 0) break;
+            goto error;
+        }
+        else if (res == 0) break;
     }
 
 error:
@@ -451,58 +411,58 @@ error:
 
 void pa__done(pa_module* m) {
     struct userdata *u;
-	
+    
     if (!(u = m->userdata)) return;
-	
+    
     if (u->sink) {
-		pa_sink_unlink(u->sink);
-		pa_sink_unref(u->sink);
-	}
-	
-	if (u->stream) AAudioStream_close(u->stream);
+        pa_sink_unlink(u->sink);
+        pa_sink_unref(u->sink);
+    }
+    
+    if (u->stream) AAudioStream_close(u->stream);
     if (u->rtpoll_item) pa_rtpoll_item_free(u->rtpoll_item);
-    if (u->aaudio_msgq) pa_asyncmsgq_unref(u->aaudio_msgq);	
-	
-	pa_xfree(u);
+    if (u->aaudio_msgq) pa_asyncmsgq_unref(u->aaudio_msgq);    
+    
+    pa_xfree(u);
 }
 
 int pa__init(pa_module* m) {
-	struct userdata *u = NULL;
-	pa_modargs *ma = NULL;
-	
+    struct userdata *u = NULL;
+    pa_modargs *ma = NULL;
+    
     if (!(ma = pa_modargs_new(m->argument, valid_modargs))) {
         pa_log("Failed to parse module arguments.");
-		goto error;
-    }		
-	
-	m->userdata = u = pa_xnew0(struct userdata, 1);
-	
+        goto error;
+    }        
+    
+    m->userdata = u = pa_xnew0(struct userdata, 1);
+    
     u->core = m->core;
-    u->module = m;	
+    u->module = m;    
     u->rtpoll = pa_rtpoll_new();
 
     if (pa_thread_mq_init(&u->thread_mq, m->core->mainloop, u->rtpoll) < 0) {
         pa_log("pa_thread_mq_init() failed.");
         goto error;
     }
-	
+    
     u->aaudio_msgq = pa_asyncmsgq_new(0);
     if (!u->aaudio_msgq) {
         pa_log("pa_asyncmsgq_new() failed.");
         goto error;
     }
-	
-	u->rtpoll_item = pa_rtpoll_item_new_asyncmsgq_read(u->rtpoll, PA_RTPOLL_EARLY-1, u->aaudio_msgq);
-	
+    
+    u->rtpoll_item = pa_rtpoll_item_new_asyncmsgq_read(u->rtpoll, PA_RTPOLL_EARLY-1, u->aaudio_msgq);
+    
     u->ss = m->core->default_sample_spec;
     pa_channel_map map = m->core->default_channel_map;
-	
+    
     if (pa_modargs_get_sample_spec_and_channel_map(ma, &u->ss, &map, PA_CHANNEL_MAP_DEFAULT) < 0) {
         pa_log("pa_modargs_get_sample_spec_and_channel_map() failed.");
         goto error;
     }
-	
-	u->ss.channels = 2;
+    
+    u->ss.channels = 2;
     u->ss.format = u->ss.format == PA_SAMPLE_FLOAT32LE || u->ss.format == PA_SAMPLE_FLOAT32BE ? PA_SAMPLE_FLOAT32LE : PA_SAMPLE_S16LE;
     
     u->volume = 1.0;
@@ -531,15 +491,15 @@ int pa__init(pa_module* m) {
         pa_log("Failed to parse low_latency argument.");
         goto error;
     }
-	
+    
     if (pa_create_aaudio_stream(u) < 0) goto error;
-	
-	pa_channel_map_init_stereo(&map);
-	if (u->ss.channels != map.channels) {
-		pa_channel_map_init_extend(&map, u->ss.channels, PA_CHANNEL_MAP_DEFAULT);
-	}
-	
-	pa_sink_new_data data;
+    
+    pa_channel_map_init_stereo(&map);
+    if (u->ss.channels != map.channels) {
+        pa_channel_map_init_extend(&map, u->ss.channels, PA_CHANNEL_MAP_DEFAULT);
+    }
+    
+    pa_sink_new_data data;
     pa_sink_new_data_init(&data);
     data.driver = __FILE__;
     data.module = m;
@@ -556,13 +516,13 @@ int pa__init(pa_module* m) {
     
     pa_proplist_sets(data.proplist, PA_PROP_DEVICE_DESCRIPTION, _("AAudio Output"));
     pa_proplist_sets(data.proplist, PA_PROP_DEVICE_CLASS, "abstract");
-	
+    
     if (pa_modargs_get_proplist(ma, "sink_properties", data.proplist, PA_UPDATE_REPLACE) < 0) {
         pa_log("pa_modargs_get_proplist() failed.");
         pa_sink_new_data_done(&data);
         goto error;
     }
-	
+    
     u->sink = pa_sink_new(m->core, &data, PA_SINK_HARDWARE);
     pa_sink_new_data_done(&data);
 
@@ -570,7 +530,7 @@ int pa__init(pa_module* m) {
         pa_log("Failed to create sink object.");
         goto error;
     }
-	
+    
     u->sink->parent.process_msg = sink_process_msg;
     u->sink->set_state_in_io_thread = sink_set_state_io_thread;
     u->sink->userdata = u;
@@ -582,14 +542,14 @@ int pa__init(pa_module* m) {
     if (!(u->thread = pa_thread_new("aaudio-sink", thread_func, u))) {
         pa_log("Failed to create thread.");
         goto error;
-    }	
-	
+    }    
+    
     pa_sink_put(u->sink);
-	pa_core_set_configured_default_sink(m->core, u->sink->name);
-    pa_modargs_free(ma);	
-	return 0;
+    pa_core_set_configured_default_sink(m->core, u->sink->name);
+    pa_modargs_free(ma);    
+    return 0;
 error:
     if (ma) pa_modargs_free(ma);
-	pa__done(m);
-	return -1;	
+    pa__done(m);
+    return -1;    
 }
