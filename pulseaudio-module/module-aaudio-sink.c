@@ -51,6 +51,7 @@ PA_MODULE_USAGE(
 enum {
     SINK_MESSAGE_RENDER = PA_SINK_MESSAGE_MAX,
     SINK_MESSAGE_TRY_START,
+    SINK_MESSAGE_TRY_STOP,
     SINK_MESSAGE_RECREATE,
 };
 
@@ -108,6 +109,10 @@ static void schedule_start(struct userdata *u) {
 
 static void schedule_recreate(struct userdata *u) {
     pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_RECREATE, NULL, 0, NULL, NULL);
+}
+
+static void schedule_stop(struct userdata *u) {
+    pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_TRY_STOP, NULL, 0, NULL, NULL);
 }
 
 static aaudio_data_callback_result_t aaudio_data_callback(AAudioStream *stream, void *userdata, void *audioData, int32_t numFrames) {
@@ -337,6 +342,18 @@ static int sink_process_msg(pa_msgobject *o, int code, void *data, int64_t offse
         return 0;
     }
     
+    if (code == SINK_MESSAGE_TRY_STOP) {
+        aaudio_result_t res;
+        pa_log("AAudio try stop requested");
+        res = AAudioStream_requestStop(u->stream);
+        if (res != AAUDIO_OK) {
+            pa_log("AAudioStream_requestStop() failed: %d", res);
+        } else {
+            pa_log("AAudio stream stopped");
+        }
+        return 0;
+    }
+    
     return pa_sink_process_msg(o, code, data, offset, memchunk);
 }
 
@@ -348,19 +365,11 @@ static int sink_set_state_io_thread(pa_sink *s, pa_sink_state_t state, pa_suspen
            s->thread_info.state, state, suspend_cause);
 
     if (PA_SINK_IS_OPENED(s->thread_info.state) && state == PA_SINK_UNLINKED) {
-        res = AAudioStream_requestStop(u->stream);
-        if (res != AAUDIO_OK) {
-            pa_log("AAudioStream_requestStop() failed: %d", res);
-        } else {
-            pa_log("AAudio stream stopped for unlink");
-        }
+        pa_log("AAudio stream stopping for unlink");
+        schedule_stop(u);
     } else if (PA_SINK_IS_OPENED(s->thread_info.state) && state == PA_SINK_SUSPENDED) {
-        res = AAudioStream_requestPause(u->stream);
-        if (res != AAUDIO_OK) {
-            pa_log("AAudioStream_requestPause() failed: %d", res);
-        } else {
-            pa_log("AAudio stream paused for suspend");
-        }
+        pa_log("AAudio stream stopping for suspend");
+        schedule_stop(u);
     } else if (s->thread_info.state == PA_SINK_SUSPENDED && PA_SINK_IS_OPENED(state)) {
         aaudio_stream_state_t stream_state = AAudioStream_getState(u->stream);
         pa_log("AAudio stream resuming from suspended state, stream state: %d", stream_state);
