@@ -49,8 +49,8 @@ if [ ! -e "$ROOT_DIR/lib/libltdl.so" ] ; then
 	mkdir -p libtool/build-$arch
 	pushd libtool/build-$arch
 	../configure --host=$BUILDCHAIN --prefix=$ROOT_DIR HELP2MAN=/bin/true MAKEINFO=/bin/true
-	make -j $(proc)
-	make install -j $(proc)
+	make -j $(nproc)
+	make install -j $(nproc)
 	popd
 fi
 
@@ -66,8 +66,8 @@ if [ ! -e "$ROOT_DIR/lib/libsndfile.so" ] ; then
 	pushd libsndfile/build-$arch
 	../configure --host=$BUILDCHAIN --prefix=$ROOT_DIR --disable-external-libs --disable-alsa --disable-sqlite
 	perl -pi -e 's/ examples / /g' Makefile
-	make -j $(proc)
-	make install -j $(proc)
+	make -j $(nproc)
+	make install -j $(nproc)
 	popd
 fi
 
