@@ -51,7 +51,6 @@
 #include <pulsecore/thread.h>
 #include <pulsecore/modargs.h>
 
-#include <sys/system_properties.h>
 #include <android/versioning.h>
 #undef __INTRODUCED_IN
 #define __INTRODUCED_IN(api_level)
@@ -130,12 +129,30 @@ static const char* const valid_modargs[] = {
     NULL
 };
 
-static int get_android_sdk_version(void) {
-    char sdk_version_str[PROP_VALUE_MAX];
-    if (__system_property_get("ro.build.version.sdk", sdk_version_str) > 0) {
-        return atoi(sdk_version_str);
+/* AAudioStreamBuilder_setInputPreset is API 28, and this module is built at API 26.
+ * Blanking __INTRODUCED_IN above lets it compile, but it also strips the annotation that
+ * would otherwise have made the reference weak, leaving a strong undefined symbol - and
+ * the module is linked with -z now, so the dynamic linker resolves every undefined symbol
+ * when the module is dlopen'd, before any of our code runs. On an API 26/27 device
+ * libaaudio.so does not export it, so the whole module would fail to load, and a runtime
+ * API-level check could not prevent that because it never gets the chance to run.
+ * Declaring it weak lets the linker leave the address NULL instead of failing the load,
+ * which is what makes the check below meaningful. Same approach as the sink. */
+extern __attribute__((weak)) void AAudioStreamBuilder_setInputPreset(AAudioStreamBuilder *builder,
+                                                                     aaudio_input_preset_t preset);
+
+static void try_set_input_preset(AAudioStreamBuilder *builder, int preset) {
+    static bool warned = false;
+
+    if (AAudioStreamBuilder_setInputPreset) {
+        AAudioStreamBuilder_setInputPreset(builder, preset);
+        return;
     }
-    return 0;
+
+    if (!warned) {
+        LOGW("AAudioStreamBuilder_setInputPreset unavailable (API < 28), using the default input preset");
+        warned = true;
+    }
 }
 
 static void schedule_start(struct userdata *u) {
@@ -213,10 +230,7 @@ static int pa_create_aaudio_stream(struct userdata *u) {
     AAudioStreamBuilder_setSampleRate(u->builder, AAUDIO_UNSPECIFIED);
     AAudioStreamBuilder_setChannelCount(u->builder, AAUDIO_UNSPECIFIED);
 
-    /* setInputPreset is API 28. Guarded the same way the sink guards setUsage. */
-    if (get_android_sdk_version() >= 28) {
-        AAudioStreamBuilder_setInputPreset(u->builder, u->input_preset);
-    }
+    try_set_input_preset(u->builder, u->input_preset);
 
     res = AAudioStreamBuilder_openStream(u->builder, &u->stream);
     if (res != AAUDIO_OK) {
