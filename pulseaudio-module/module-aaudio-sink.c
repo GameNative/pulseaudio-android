@@ -99,14 +99,6 @@ static const char* const valid_modargs[] = {
     NULL
 };
 
-static int get_android_sdk_version(void) {
-    char sdk_version_str[PROP_VALUE_MAX];
-    if (__system_property_get("ro.build.version.sdk", sdk_version_str) > 0) {
-        return atoi(sdk_version_str);
-    }
-    return 0;
-}
-
 static void schedule_start(struct userdata *u) {
     pa_asyncmsgq_post(u->thread_mq.inq, PA_MSGOBJECT(u->sink), SINK_MESSAGE_TRY_START, NULL, 0, NULL, NULL);
 }
@@ -174,7 +166,7 @@ static int pa_create_aaudio_stream(struct userdata *u) {
     }
 
     if (u->low_latency) {
-        if (get_android_sdk_version() >= 28) {
+        if (android_get_device_api_level() >= 28) {
             AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
         }
         AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
