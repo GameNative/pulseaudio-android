@@ -17,6 +17,11 @@ export ACLOCAL_PATH=$ROOT_DIR/share/aclocal
 export CFLAGS="-O2 -I$ROOT_DIR/include"
 export LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 
+# The vendored libtool/libsndfile trees ship aclocal.m4 with am__api_version='1.15'.
+# Retarget it at whatever automake this host has rather than a hardcoded version,
+# so the tree builds on machines with a different automake installed.
+export AMVER=$(automake --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+
 export ALLOW_UNRESOLVED_SYMBOLS=1
 export ac_cv_func_mkfifo=no
 export ac_cv_func_getuid=no
@@ -42,7 +47,7 @@ export CXX="$TOOLCHAIN/${BUILDCHAIN}26-clang++"
 
 if [ ! -e "$ROOT_DIR/lib/libltdl.so" ] ; then
   pushd libtool
-  sed -i 's/1.15/1.18/g' aclocal.m4
+  sed -i "s/1.15/$AMVER/g" aclocal.m4
   autoreconf
   popd
 
@@ -58,7 +63,7 @@ export LIBTOOLIZE=$ROOT_DIR/bin/libtoolize
 
 if [ ! -e "$ROOT_DIR/lib/libsndfile.so" ] ; then
   pushd libsndfile
-  sed -i 's/1.15/1.18/g' aclocal.m4
+  sed -i "s/1.15/$AMVER/g" aclocal.m4
   autoreconf
   popd
   
