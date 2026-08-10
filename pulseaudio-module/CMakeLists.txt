@@ -26,3 +26,17 @@ target_link_libraries(module-aaudio-sink
         pulsecommon-13.0
         pulse
         aaudio)
+
+add_library(module-aaudio-source SHARED
+        module-aaudio-source.c)
+
+set_target_properties(module-aaudio-source PROPERTIES
+        OUTPUT_NAME "module-aaudio-source"
+        PREFIX ""
+        SUFFIX ".so")
+
+target_link_libraries(module-aaudio-source
+        pulsecore-13.0
+        pulsecommon-13.0
+        pulse
+        aaudio)
