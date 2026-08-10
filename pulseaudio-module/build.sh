@@ -12,12 +12,12 @@ export TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
 export CC="$TOOLCHAIN/aarch64-linux-android26-clang"
 export CFLAGS="-I../pulseaudio/build-arm64 -I../pulseaudio/src -I../root-arm64/include"
-export LDFLAGS="-L../root-arm64/lib/pulseaudio -L../root-arm64/lib"
+export LDFLAGS="-L../root-arm64/lib/pulseaudio -L../root-arm64/lib -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 
 $CC -O2 -shared $CFLAGS $LDFLAGS -lpulsecore-13.0 -lpulsecommon-13.0 -lpulse -laaudio -llog -o build64/module-aaudio-sink.so module-aaudio-sink.c
 
 export CC="$TOOLCHAIN/armv7a-linux-androideabi26-clang"
 export CFLAGS="-I../pulseaudio/build-armhf -I../pulseaudio/src -I../root-armhf/include"
-export LDFLAGS="-L../root-armhf/lib/pulseaudio -L../root-armhf/lib"
+export LDFLAGS="-L../root-armhf/lib/pulseaudio -L../root-armhf/lib -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 
 $CC -O2 -shared $CFLAGS $LDFLAGS -lpulsecore-13.0 -lpulsecommon-13.0 -lpulse -laaudio -llog -o build/module-aaudio-sink.so module-aaudio-sink.c
