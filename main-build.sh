@@ -76,6 +76,13 @@ if [ ! -e "$ROOT_DIR/lib/libsndfile.so" ] ; then
 	popd
 fi
 
+# configure.ac derives the version through ./git-version-gen, which needs either a
+# reachable git tag or a .tarball-version file. The pulseaudio fork carries no tags
+# and .tarball-version is gitignored, so a fresh clone fails configure with
+# 'git-version-gen failed'. Seed it; bootstrap.sh then rewrites it to
+# 13.0-rebootstrapped, matching the version the shipped binaries report.
+[ -f pulseaudio/.tarball-version ] || printf '13.0' > pulseaudio/.tarball-version
+
 pushd pulseaudio
 env NOCONFIGURE=1 bash -x ./bootstrap.sh
 popd
