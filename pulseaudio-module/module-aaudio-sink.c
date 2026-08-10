@@ -32,6 +32,19 @@
 #undef __INTRODUCED_IN
 #define __INTRODUCED_IN(api_level)
 #include <aaudio/AAudio.h>
+
+/* AAudioStreamBuilder_setUsage was introduced in API 28, but blanking __INTRODUCED_IN
+   above also strips the availability annotation that would otherwise have made the
+   reference weak, so it ends up a *strong* undefined symbol. The NDK links this module
+   with -z now, so the dynamic linker resolves every undefined symbol at dlopen() time --
+   before any code in this file, including the API level check below, gets a chance to
+   run. On an API 26/27 device libaaudio.so does not export it, so the module fails to
+   load outright; because the daemon runs with --fail=false that surfaces as "no audio"
+   rather than an error. Redeclaring it weak lets the linker leave the address NULL
+   instead of failing the load, so the guard below can do its job. */
+extern __attribute__((weak)) void AAudioStreamBuilder_setUsage(AAudioStreamBuilder *builder,
+                                                               aaudio_usage_t usage);
+
 #include <android/log.h>
 
 #define LOG_TAG "GN-PulseAudioSink"
@@ -166,7 +179,7 @@ static int pa_create_aaudio_stream(struct userdata *u) {
     }
 
     if (u->low_latency) {
-        if (android_get_device_api_level() >= 28) {
+        if (AAudioStreamBuilder_setUsage && android_get_device_api_level() >= 28) {
             AAudioStreamBuilder_setUsage(u->builder, AAUDIO_USAGE_GAME);
         }
         AAudioStreamBuilder_setSharingMode(u->builder, AAUDIO_SHARING_MODE_SHARED);
