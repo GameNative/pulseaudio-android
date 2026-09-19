@@ -8,6 +8,7 @@ cp -a ../output/aarch64-linux-gnu/modules/module-native-protocol-unix.so pulseau
 cp -a ../output/aarch64-linux-gnu/modules/module-pipe-source.so pulseaudio/modules
 
 cp -a build64/module-aaudio-sink.so pulseaudio/modules
+cp -a build64/module-aaudio-source.so pulseaudio/modules
 
 tar -I 'zstd --ultra -22' -cf pulseaudio-gamenative.tzst -C pulseaudio .
 
