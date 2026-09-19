@@ -23,7 +23,7 @@ export LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 export AMVER=$(automake --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
 
 export ALLOW_UNRESOLVED_SYMBOLS=1
-export ac_cv_func_mkfifo=no
+export ac_cv_func_mkfifo=yes
 export ac_cv_func_getuid=no
 export ac_cv_func_getuid=seteuid
 export ax_cv_PTHREAD_PRIO_INHERIT=no
@@ -116,6 +116,7 @@ cp -a $ROOT_DIR/lib/libsndfile.so $OUTPUT_DIR/libsndfile.so
 cp -a $ROOT_DIR/lib/libltdl.so $OUTPUT_DIR/libltdl.so
 cp -a $ROOT_DIR/lib/pulse-13.0/modules/libprotocol-native.so $OUTPUT_DIR/modules/libprotocol-native.so
 cp -a $ROOT_DIR/lib/pulse-13.0/modules/module-native-protocol-unix.so $OUTPUT_DIR/modules/module-native-protocol-unix.so
+cp -a $ROOT_DIR/lib/pulse-13.0/modules/module-pipe-source.so $OUTPUT_DIR/modules/module-pipe-source.so
 
 $TOOLCHAIN/llvm-strip $OUTPUT_DIR/pactl
 $TOOLCHAIN/llvm-strip $OUTPUT_DIR/libpulseaudio.so
@@ -126,3 +127,4 @@ $TOOLCHAIN/llvm-strip $OUTPUT_DIR/libsndfile.so
 $TOOLCHAIN/llvm-strip $OUTPUT_DIR/libltdl.so
 $TOOLCHAIN/llvm-strip $OUTPUT_DIR/modules/libprotocol-native.so
 $TOOLCHAIN/llvm-strip $OUTPUT_DIR/modules/module-native-protocol-unix.so
+$TOOLCHAIN/llvm-strip $OUTPUT_DIR/modules/module-pipe-source.so
